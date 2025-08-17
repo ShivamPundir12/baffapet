@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -10,7 +9,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:share_plus/share_plus.dart';
 
 const String app_url = "https://bafapet.com/";
 const List<String> external_hosts = [
@@ -26,7 +24,6 @@ const List<String> external_hosts = [
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Required for Android debugging features; safe to keep
   if (!kIsWeb && Platform.isAndroid) {
     await InAppWebViewController.setWebContentsDebuggingEnabled(true);
   }
@@ -39,19 +36,98 @@ class WebAppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: "Bafapet",
+      title: 'Bafapet',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,
-      darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.brown,
-          brightness: Brightness.dark,
-        ),
-      ),
+
+      // LIGHT THEME
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        brightness: Brightness.light,
+        colorScheme: const ColorScheme(
+          brightness: Brightness.light,
+          primary: Color(
+            0xFF5B8DEF,
+          ), // accent (selected day, clock hand, headers)
+          onPrimary: Colors.white, // text on accent
+          secondary: Color(0xFF5B8DEF),
+          onSecondary: Colors.white,
+          surface: Color(0xFFF8FAFC), // dialog background (light)
+          onSurface: Color(0xFF0F172A), // text on dialog
+          background: Color(0xFFFFFFFF),
+          onBackground: Color(0xFF0F172A),
+          error: Color(0xFFEF4444),
+          onError: Colors.white,
+          primaryContainer: Color(0xFF9DBDFF),
+          onPrimaryContainer: Color(0xFF0B2545),
+          secondaryContainer: Color(0xFF9DBDFF),
+          onSecondaryContainer: Color(0xFF0B2545),
+          surfaceTint: Color(0xFF5B8DEF),
+          outline: Color(0xFFE2E8F0),
+          outlineVariant: Color(0xFFD1D5DB),
+          tertiary: Color(0xFF5B8DEF),
+          onTertiary: Colors.white,
+          scrim: Colors.black54,
+          inverseSurface: Color(0xFF111827),
+          onInverseSurface: Color(0xFFE5E7EB),
+          inversePrimary: Color(0xFF3B82F6),
+          shadow: Colors.black,
+        ),
+        dialogTheme: const DialogThemeData(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+          ),
+          elevation: 8,
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF5B8DEF), // OK/Cancel
+          ),
+        ),
         useMaterial3: true,
       ),
+
+      // DARK THEME (matches your screenshot palette)
+      darkTheme: ThemeData(
+        brightness: Brightness.dark,
+        colorScheme: const ColorScheme(
+          brightness: Brightness.dark,
+          primary: Color(0xFFA7C7FF), // light-blue accent
+          onPrimary: Color(0xFF0B2545), // dark text on accent chip
+          secondary: Color(0xFFA7C7FF),
+          onSecondary: Color(0xFF0B2545),
+          surface: Color(0xFF2F2F2F), // dialog panel background
+          onSurface: Color(0xFFE5E7EB), // labels/text
+          error: Color(0xFFEF4444),
+          onError: Colors.white,
+          primaryContainer: Color(0xFF9DBDFF),
+          onPrimaryContainer: Color(0xFF0B2545),
+          secondaryContainer: Color(0xFF9DBDFF),
+          onSecondaryContainer: Color(0xFF0B2545),
+          surfaceTint: Color(0xFFA7C7FF),
+          outline: Color(0xFF4B5563), // borders/dividers
+          outlineVariant: Color(0xFF374151),
+          tertiary: Color(0xFFA7C7FF),
+          onTertiary: Color(0xFF0B2545),
+          scrim: Colors.black54,
+          inverseSurface: Color(0xFFE5E7EB),
+          onInverseSurface: Color(0xFF111827),
+          inversePrimary: Color(0xFF5B8DEF),
+          shadow: Colors.black,
+        ),
+        dialogTheme: const DialogThemeData(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+          ),
+          elevation: 8,
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            foregroundColor: Color(0xFFA7C7FF), // OK/Cancel
+          ),
+        ),
+        useMaterial3: true,
+      ),
+
       home: const WebHomePage(),
     );
   }
@@ -73,10 +149,73 @@ class _WebHomePageState extends State<WebHomePage> {
   bool _isOnline = true;
   bool _canGoBack = false;
   String _appVersion = "";
+  int _lastInjectMs = 0;
+
+  // JS: convert native date/time inputs to text and invoke Flutter handler on focus
+  static const String _nativeHookJs = r"""
+    (function(){
+      function hook(doc){
+        if (!doc) return;
+        var q = doc.querySelectorAll('input[type=date],input[type=time],input[type=datetime-local]');
+        q.forEach(function(el){
+          if (!el || el.dataset._nativeHooked === '1') return;
+          el.dataset._nativeHooked = '1';
+
+          var v = el.value;
+          try { el.type = 'text'; } catch(e) { el.setAttribute('type','text'); }
+          if (v) el.value = v;
+
+          el.classList.add('force-js-picker');
+          el.setAttribute('inputmode','text');
+          el.setAttribute('autocomplete','off');
+
+          el.addEventListener('focus', function(){
+            try {
+              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                // Ask Flutter to open native pickers
+                window.flutter_inappwebview.callHandler('openNativeDateTime');
+              }
+            } catch(e){}
+            try { el.blur(); } catch(e){}
+          }, {passive:true});
+        });
+      }
+
+      function patch(doc){
+        hook(doc);
+        if (!doc.__nativeHookObs){
+          doc.__nativeHookObs = true;
+          try{
+            var mo = new MutationObserver(function(){
+              if (doc.__nativeHookPend) return;
+              doc.__nativeHookPend = true;
+              (doc.defaultView || window).requestAnimationFrame(function(){
+                doc.__nativeHookPend = false;
+                hook(doc);
+              });
+            });
+            mo.observe(doc.documentElement || doc.body, {childList:true, subtree:true});
+          }catch(e){}
+        }
+      }
+
+      try { patch(document); } catch(e){}
+      try {
+        var ifr = document.querySelectorAll('iframe');
+        for (var i=0;i<ifr.length;i++){
+          try {
+            var idoc = ifr[i].contentDocument || (ifr[i].contentWindow && ifr[i].contentWindow.document);
+            patch(idoc);
+          } catch(e){}
+        }
+      } catch(e){}
+    })();
+  """;
 
   @override
   void initState() {
     super.initState();
+
     if (!kIsWeb) {
       _ptrController = PullToRefreshController(
         settings: PullToRefreshSettings(color: Colors.blue),
@@ -97,9 +236,7 @@ class _WebHomePageState extends State<WebHomePage> {
       final online = result != ConnectivityResult.none;
       if (_isOnline != online) {
         setState(() => _isOnline = online);
-        if (online) {
-          _webViewController?.reload();
-        }
+        if (online) _webViewController?.reload();
       }
     });
 
@@ -112,7 +249,6 @@ class _WebHomePageState extends State<WebHomePage> {
   }
 
   Future<void> _requestCommonPermissions() async {
-    // Request storage for downloads (Android <13), notifications (Android 13+ prompts at runtime), camera/mic for uploads
     if (!kIsWeb) {
       if (Platform.isAndroid) {
         await [
@@ -120,8 +256,6 @@ class _WebHomePageState extends State<WebHomePage> {
           Permission.microphone,
           Permission.photos,
         ].request();
-      } else if (Platform.isIOS) {
-        // iOS will prompt when needed; explicit pre-requests are optional
       }
     }
   }
@@ -144,21 +278,19 @@ class _WebHomePageState extends State<WebHomePage> {
       final data = await controller
           .callAsyncJavaScript(
             functionBody: """
-        async function downloadFile(u){
-          const res = await fetch(u, {credentials: 'include'});
-          const buf = await res.arrayBuffer();
-          return Array.from(new Uint8Array(buf));
-        }
-      """,
-            arguments: {},
+            async function downloadFile(u){
+              const res = await fetch(u, {credentials: 'include'});
+              const buf = await res.arrayBuffer();
+              return Array.from(new Uint8Array(buf));
+            }
+          """,
           )
-          .then((_) async {
-            // run the JS function
-            return await controller.callAsyncJavaScript(
+          .then(
+            (_) => controller.callAsyncJavaScript(
               functionBody:
                   "return await downloadFile('${url.toString().replaceAll("'", "\\'")}');",
-            );
-          });
+            ),
+          );
 
       if (data?.value is List) {
         final bytes = List<int>.from(data!.value);
@@ -175,7 +307,7 @@ class _WebHomePageState extends State<WebHomePage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text("Download failed")));
+        ).showSnackBar(const SnackBar(content: Text("Download failed")));
       }
     }
   }
@@ -185,9 +317,8 @@ class _WebHomePageState extends State<WebHomePage> {
     if (scheme == "tel" ||
         scheme == "mailto" ||
         scheme == "sms" ||
-        scheme == "intent") {
+        scheme == "intent")
       return true;
-    }
     final host = url.host.toLowerCase();
     return external_hosts.any((h) => host.contains(h));
   }
@@ -206,8 +337,110 @@ class _WebHomePageState extends State<WebHomePage> {
         return NavigationActionPolicy.CANCEL;
       }
     }
-
     return NavigationActionPolicy.ALLOW;
+  }
+
+  Future<void> _injectHookDebounced() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastInjectMs < 600) return;
+    _lastInjectMs = now;
+    try {
+      // Encourage desktop assets (if site looks at UA)
+      await _webViewController?.setSettings(
+        settings: InAppWebViewSettings(
+          userAgent:
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ),
+      );
+    } catch (_) {}
+    try {
+      await _webViewController?.evaluateJavascript(source: _nativeHookJs);
+    } catch (_) {}
+  }
+
+  // Open native pickers and write back formatted value with full event dispatch
+  Future<void> _openNativeAndWriteBack() async {
+    final now = DateTime.now();
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (pickedDate == null) return;
+
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(now),
+    );
+    if (pickedTime == null) return;
+
+    final dt = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+
+    final formatted = _formatForSite(dt); // "MM/DD/YYYY, h:mm AM/PM"
+
+    final writeBackJs =
+        """
+      (function(){
+        function target(){
+          var el = document.activeElement;
+          if (el && el.tagName && el.tagName.toLowerCase() === 'input') return el;
+          var list = document.querySelectorAll('input.force-js-picker');
+          if (list && list.length) return list[list.length-1];
+          return null;
+        }
+        var el = target();
+        if (!el) return;
+
+        var newVal = "$formatted";
+        var proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
+        var setter = proto ? Object.getOwnPropertyDescriptor(proto, 'value') : null;
+        if (setter && setter.set) { setter.set.call(el, newVal); } else { el.value = newVal; }
+        try { el.setSelectionRange(newVal.length, newVal.length); } catch(e){}
+
+        ['input','change','blur'].forEach(function(t){ el.dispatchEvent(new Event(t, {bubbles:true})); });
+
+        try {
+          ['keydown','keyup'].forEach(function(t){
+            var evt = new KeyboardEvent(t, {bubbles:true, cancelable:true, key:'Tab'});
+            el.dispatchEvent(evt);
+          });
+        } catch(e){}
+
+        try {
+          var hidden = el.parentElement && el.parentElement.querySelector('input[type="hidden"]');
+          if (hidden) {
+            var hp = window.HTMLInputElement && window.HTMLInputElement.prototype;
+            var hs = hp ? Object.getOwnPropertyDescriptor(hp, 'value') : null;
+            if (hs && hs.set) { hs.set.call(hidden, newVal); } else { hidden.value = newVal; }
+            ['input','change'].forEach(function(t){ hidden.dispatchEvent(new Event(t, {bubbles:true})); });
+          }
+        } catch(e){}
+
+        if (el.form) { try { el.form.dispatchEvent(new Event('input', {bubbles:true})); } catch(e){} }
+      })();
+    """;
+
+    try {
+      await _webViewController?.evaluateJavascript(source: writeBackJs);
+    } catch (_) {}
+  }
+
+  // Format: "MM/DD/YYYY, h:mm AM/PM"
+  String _formatForSite(DateTime dt) {
+    final mm = dt.month.toString().padLeft(2, '0');
+    final dd = dt.day.toString().padLeft(2, '0');
+    final yyyy = dt.year.toString();
+    final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final min = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+    return "$mm/$dd/$yyyy, $hour12:$min $ampm";
   }
 
   @override
@@ -215,7 +448,7 @@ class _WebHomePageState extends State<WebHomePage> {
     final initialUrl = WebUri(app_url);
 
     return PopScope(
-      canPop: !_canGoBack, // intercept system back when webview can go back
+      canPop: !_canGoBack,
       onPopInvokedWithResult: (didPop, result) async {
         if (!didPop && _webViewController != null) {
           if (await _webViewController!.canGoBack()) {
@@ -258,11 +491,23 @@ class _WebHomePageState extends State<WebHomePage> {
                     supportZoom: true,
                   ),
                   initialUrlRequest: URLRequest(url: initialUrl),
-                  pullToRefreshController: kIsWeb && Platform.isIOS
+                  pullToRefreshController:
+                      (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)
                       ? null
                       : _ptrController,
                   onWebViewCreated: (controller) async {
                     _webViewController = controller;
+
+                    // Register a handler that JS can call: window.flutter_inappwebview.callHandler('openNativeDateTime')
+                    controller.addJavaScriptHandler(
+                      handlerName: 'openNativeDateTime',
+                      callback: (args) async {
+                        // Open pickers and write back
+                        await _openNativeAndWriteBack();
+                        return null;
+                      },
+                    );
+
                     await _requestCommonPermissions();
                   },
                   onLoadStart: (controller, url) {
@@ -276,9 +521,13 @@ class _WebHomePageState extends State<WebHomePage> {
                         _canGoBack = canGoBack;
                       });
                     }
+                    await _injectHookDebounced();
                   },
-                  onProgressChanged: (controller, progress) {
-                    if (progress == 100) _ptrController.endRefreshing();
+                  onProgressChanged: (controller, progress) async {
+                    if (progress == 100) {
+                      _ptrController.endRefreshing();
+                      await _injectHookDebounced();
+                    }
                     setState(() => _progress = progress / 100);
                   },
                   shouldOverrideUrlLoading: (controller, action) async {
@@ -287,7 +536,6 @@ class _WebHomePageState extends State<WebHomePage> {
                   },
                   onReceivedError: (controller, request, error) async {
                     _ptrController.endRefreshing();
-                    // Load offline page
                     final offlineHtml = await DefaultAssetBundle.of(
                       context,
                     ).loadString("assets/offline.html");
@@ -300,7 +548,6 @@ class _WebHomePageState extends State<WebHomePage> {
                     await _handleDownload(controller, request.url);
                   },
                   onPermissionRequest: (controller, request) async {
-                    // Auto-grant camera/mic for in-page prompts after requesting OS permission
                     await _requestCommonPermissions();
                     return PermissionResponse(
                       resources: request.resources,
@@ -308,8 +555,7 @@ class _WebHomePageState extends State<WebHomePage> {
                     );
                   },
                   onConsoleMessage: (controller, consoleMessage) {
-                    // Useful for debugging web issues
-                    // print(consoleMessage);
+                    // Keep quiet to avoid verbosity; add logging if needed
                   },
                 ),
               ),

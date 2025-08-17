@@ -1,3 +1,6 @@
+// android/app/build.gradle.kts
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -20,21 +23,59 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.baffapet.app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        applicationId = "com.bafapet.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    // --- Load keystore properties (expects a file named key.properties) ---
+    // Try both project root and module dir to be flexible
+    val keystoreProps = Properties().apply {
+        val rootFile = rootProject.file("key.properties")
+        val moduleFile = file("key.properties")
+        val f = if (rootFile.exists()) rootFile else moduleFile
+        if (f.exists()) {
+            f.inputStream().use { load(it) }
+        }
+    }
+
+    signingConfigs {
+        if (keystoreProps.isNotEmpty()) {
+            create("release") {
+                keyAlias = keystoreProps["keyAlias"] as String
+                keyPassword = keystoreProps["keyPassword"] as String
+                storeFile = file(keystoreProps["storeFile"] as String)
+                storePassword = keystoreProps["storePassword"] as String
+            }
+        }
+        // Usually the default Android debug keystore is fine; uncomment only if you need custom debug signing:
+        // create("debug") {
+        //     keyAlias = "androiddebugkey"
+        //     keyPassword = "android"
+        //     storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+        //     storePassword = "android"
+        // }
+    }
+
     buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+        getByName("release") {
+            // Will be null if key.properties wasn't found; that's OK for now (unsigned build)
+            signingConfig = signingConfigs.findByName("release")
+
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+        getByName("debug") {
+            // signingConfig = signingConfigs.getByName("debug") // only if you created one above
+            isMinifyEnabled = false
+            isShrinkResources = false
+            isDebuggable = true
         }
     }
 }
